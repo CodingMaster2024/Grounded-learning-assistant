@@ -257,8 +257,14 @@ def is_full_document_request(question: str) -> bool:
 
 
 def load_full_document_evidence():
-    """Read complete uploaded text files for exhaustive extraction requests, not just top-k chunks."""
+    """Use complete text retained in the current session, with disk as a fallback."""
     full = []
+    session_texts = st.session_state.get("uploaded_full_texts", {})
+    for name, text in session_texts.items():
+        if text.strip():
+            full.append({"text": text.strip(), "source": name, "chunk": "full document", "semantic": 0.0, "keyword": 1.0, "score": 1.0})
+    if full:
+        return full
     for path in DATA_DIR.iterdir():
         if path.is_file() and path.suffix.lower() in {".pdf", ".txt", ".md"}:
             try:
@@ -295,6 +301,10 @@ if "quiz_attempt_logged" not in st.session_state:
     st.session_state.quiz_attempt_logged = False
 if "upload_widget_version" not in st.session_state:
     st.session_state.upload_widget_version = 0
+if "uploaded_docs" not in st.session_state:
+    st.session_state.uploaded_docs = []
+if "uploaded_full_texts" not in st.session_state:
+    st.session_state.uploaded_full_texts = {}
 
 with st.sidebar:
     st.header("Learning controls")
@@ -321,15 +331,35 @@ with st.sidebar:
     )
     if uploads:
         saved = []
+        current_docs = []
+        current_full_texts = {}
         for upload in uploads:
             safe_name = Path(upload.name).name
-            target = DATA_DIR / safe_name
             raw = upload.getvalue()
-            if not target.exists() or target.read_bytes() != raw:
-                target.write_bytes(raw)
-            saved.append(target.name)
-        if saved:
-            st.success("Available: " + ", ".join(saved))
+            try:
+                # Keep a session copy as well as a best-effort disk copy. Cloud
+                # filesystems may be ephemeral, so retrieval must not depend on disk.
+                target = DATA_DIR / safe_name
+                if not target.exists() or target.read_bytes() != raw:
+                    target.write_bytes(raw)
+                text = extract_text(safe_name, raw).strip()
+                if not text:
+                    st.error(f"No selectable text was extracted from {safe_name}. If this is a scanned PDF, OCR is required.")
+                    continue
+                current_full_texts[safe_name] = text
+                chunks = make_chunks(text)
+                for i, chunk in enumerate(chunks, start=1):
+                    current_docs.append({"text": chunk, "source": safe_name, "chunk": i})
+                saved.append(f"{safe_name} ({len(text):,} characters)")
+            except Exception as exc:
+                st.error(f"Could not process {safe_name}: {exc}")
+        if current_docs:
+            st.session_state.uploaded_docs = current_docs
+            st.session_state.uploaded_full_texts = current_full_texts
+            st.success("Available in this session: " + ", ".join(saved))
+            st.caption(f"Document processing check: {len(current_docs)} text chunks ready for retrieval.")
+    elif st.session_state.get("uploaded_docs"):
+        st.success("Uploaded documents are ready in this session.")
     if st.button("Clear uploaded documents", help="Deletes locally saved course documents from this project folder."):
         removed = 0
         for path in DATA_DIR.iterdir():
@@ -341,6 +371,8 @@ with st.sidebar:
         st.session_state.quiz_submitted = False
         st.session_state.pop("quiz_answers", None)
         st.session_state.upload_widget_version += 1
+        st.session_state.uploaded_docs = []
+        st.session_state.uploaded_full_texts = {}
         st.success(f"Removed {removed} document(s). General chat remains available.")
         st.rerun()
     st.caption("No upload is required for General chat, Explain concept, or Guided learning.")
@@ -351,15 +383,22 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-docs = load_documents()
+docs = st.session_state.get("uploaded_docs", [])
+if not docs:
+    docs = load_documents()
 # Local browser-integrity event receiver is intentionally not started in cloud deployment.
 
 st.title("🎓 Grounded Learning Assistant")
 st.caption("A student-built AI learning assistant · hosted AI model · internet connection required")
+if docs:
+    source_names = sorted({item["source"] for item in docs})
+    st.success(f"Document ready: {', '.join(source_names)} · {len(docs)} text chunks available")
+else:
+    st.info("No document is loaded yet. Open Learning controls, upload a PDF/TXT/MD file, and wait for the Document ready confirmation.")
 
 with st.expander("How this prototype works"):
     st.write(
-        "General modes send the prompt directly to the local language model. When you choose Ask uploaded documents, "
+        "General modes send the prompt directly to the hosted language model. When you choose Ask uploaded documents, "
         "the app retrieves relevant passages from your optional files and includes them as evidence. Practice Quiz "
         "creates an interactive MCQ form; you may leave questions blank and the answer key is shown only after you submit. "
         "Common LaTeX math delimiters are rendered as equations. This prototype can still make mistakes."
