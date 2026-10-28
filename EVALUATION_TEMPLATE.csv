@@ -1,0 +1,3 @@
+question,expected_answer
+"What are the three main stages of the proposed architecture?","Use the exact stage names supported by the uploaded proposed-solutions paper."
+"What should the system do when retrieved evidence is insufficient?","It should state that evidence is insufficient and avoid inventing an answer."
