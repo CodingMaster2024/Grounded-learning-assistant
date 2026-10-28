@@ -21,7 +21,7 @@ DATA_DIR = APP_DIR / "knowledge_base"
 DATA_DIR.mkdir(exist_ok=True)
 QUIZ_LOG = DATA_DIR / "quiz_attempts.jsonl"
 INTEGRITY_LOG = DATA_DIR / "integrity_events.jsonl"
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 st.set_page_config(page_title="Grounded Learning Assistant", page_icon="🎓", layout="wide")
