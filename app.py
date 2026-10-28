@@ -244,6 +244,32 @@ def query_refers_to_uploaded_material(question: str) -> bool:
     return any(re.search(pattern, q, flags=re.I) for pattern in patterns)
 
 
+def is_full_document_request(question: str) -> bool:
+    """Detect requests to extract/list all items from a document, where top-k retrieval loses coverage."""
+    q = question.lower()
+    patterns = [
+        r"\b(all|every|complete|entire|full)\b.{0,70}\b(question|questions|items|sections|headings|points|list|document|pdf)\b",
+        r"\b(extract|list|reproduce|transcribe|copy)\b.{0,90}\b(all|every|complete|entire|full|long[- ]answer|short[- ]answer|questions|question)\b",
+        r"\b(long[- ]answer questions|short[- ]answer questions)\b",
+        r"\bquestions?\s*(6\s*(through|to|[-–])\s*12|1\s*(through|to|[-–])\s*12)\b",
+    ]
+    return any(re.search(pattern, q, flags=re.I) for pattern in patterns)
+
+
+def load_full_document_evidence():
+    """Read complete uploaded text files for exhaustive extraction requests, not just top-k chunks."""
+    full = []
+    for path in DATA_DIR.iterdir():
+        if path.is_file() and path.suffix.lower() in {".pdf", ".txt", ".md"}:
+            try:
+                text = extract_text(path.name, path.read_bytes()).strip()
+                if text:
+                    full.append({"text": text, "source": path.name, "chunk": "full document", "semantic": 0.0, "keyword": 1.0, "score": 1.0})
+            except Exception as exc:
+                st.warning(f"Could not read full text from {path.name}: {exc}")
+    return full
+
+
 def verify_grounded_answer(question, answer, found):
     """Second-pass source check. Helpful but not a formal guarantee of correctness."""
     excerpts = context_for(found)
@@ -590,7 +616,11 @@ if question:
                 if mode == "General chat":
                     st.info("Your prompt refers to uploaded course material, so this answer is being grounded in the uploaded file(s).")
                 with st.spinner("Searching your course material…"):
-                    found = retrieve(question, docs)
+                    if is_full_document_request(question):
+                        # Exhaustive extraction needs the complete source, not only the top four matching chunks.
+                        found = load_full_document_evidence()
+                    else:
+                        found = retrieve(question, docs)
                 if not found:
                     answer = "I couldn't find enough relevant evidence in the uploaded documents to answer that reliably. Try a more specific question, or use General chat for a general-knowledge answer."
                 else:
@@ -599,7 +629,13 @@ if question:
                         "If the excerpts do not support an answer, say so. Add source markers such as [S1] only "
                         "when supported by the matching excerpt. Do not invent facts, citations, or numerical results."
                     )
-                    prompt = f"Question: {question}\n\nExcerpts:\n{context_for(found)}"
+                    if is_full_document_request(question):
+                        instructions += (
+                            " For exhaustive extraction/listing requests, inspect the entire supplied document text. "
+                            "Preserve original numbering and wording. Include every requested item, not just the first few. "
+                            "Do not claim items are absent unless you checked the full text. If a line is genuinely truncated in the source, mark only that line as truncated."
+                        )
+                    prompt = f"Question: {question}\n\nFull source text or retrieved excerpts:\n{context_for(found)}"
                     with st.spinner("Generating a source-grounded answer…"):
                         answer = ollama_chat([
                             {"role": "system", "content": "You are a careful educational assistant. Follow this policy: " + instructions},
